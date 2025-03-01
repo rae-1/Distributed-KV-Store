@@ -107,6 +107,27 @@ class consistentHashing(rpyc.Service):
         logging.debug("Listing completed.")
         logging.debug("------"*4)
 
+    def _remove_server(self, host, port) -> None:
+        logging.debug("Removing the server.")
+        for vNodeNumber in range(self.vNode):
+            serverId: str = f"{host}_{port}_{vNodeNumber}"
+            ringIndex: int = self._createHash(serverId)
+            del self.ring[ringIndex]
+        self.sortedServers = [server for server in self.sortedServers if server[1] != (host, port)]
+        logging.debug("Server removed.")
+        logging.debug("------"*4)
+
+    def _add_server(self, host, port) -> None:
+        logging.debug("Adding the server.")
+        for vNodeNumber in range(self.vNode):
+            serverId: str = f"{host}_{port}_{vNodeNumber}"
+            ringIndex: int = self._createHash(serverId)
+            self.ring[ringIndex] = (host, port, vNodeNumber)
+        self.sortedServers.append((ringIndex, (host, port, vNodeNumber)))
+        self.sortedServers = sorted(self.sortedServers, key=lambda x: x[0])
+        logging.debug("Server added.")
+        logging.debug("------"*4)
+
     def _destory(self) -> None:
         self.ring = dict();
         self.sortedServers = list()
