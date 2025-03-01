@@ -14,4 +14,17 @@ python3 loadBalancer/consistentHashing.py
 python3 client/client.py
 ```
 
-To keep track of what is happening to the server you can look at LB.log.
+Now to setup the server build the image and run it using:
+```bash
+docker build -t server_1
+docker run -it --name=server_1_con -p 9000:9000 server_1
+```
+
+To keep track of what is happening to the server, client, and LB you can look at .log files.
+
+
+If you want to setup a custom network and use it:
+```bash
+docker network create -d bridge --subnet=192.168.1.0/24 kv_store
+docker run -it --name=server_1_con --net=kv_store --ip=192.168.1.100 -p 9000:9000 server_1
+```
