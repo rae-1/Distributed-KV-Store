@@ -1,0 +1,2 @@
+lb_host: localhost
+lb_port: 5000
