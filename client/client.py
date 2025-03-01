@@ -40,8 +40,7 @@ if __name__ == '__main__':
         choice: int = int(input("enter your choice:"))
         match choice:
             case 1: # init
-                # server_list = ["127.0.0.1:8000", "localhost:9000"]
-                server_list = ["localhost:9000"]
+                server_list = ["localhost:9001", "localhost:9002", "localhost:9003", "localhost:9004", "localhost:9005"]
                 response = client.kv_init(server_list)
                 print(f"status_code: {response}")
             case 2: # GET

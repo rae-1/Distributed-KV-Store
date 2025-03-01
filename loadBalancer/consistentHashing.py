@@ -14,8 +14,12 @@ logging.basicConfig(level=logging.DEBUG, filename=f"{curPath}/LB.log", filemode=
 # NOTE: finding the coordinator node > done
 # NOTE: generating the routing table for each server > done
 # TODO: sending the routing table to the servers
-# TODO: in the destroy function connections needs to be closed.
 # TODO: integration with the server
+
+# TODO: SQL integration
+# TODO: hinted handoff
+# TODO: testbench
+# TODO: VCN: Version Control Number
 
 class consistentHashing(rpyc.Service):
     def __init__(self):
