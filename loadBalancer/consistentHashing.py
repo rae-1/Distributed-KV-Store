@@ -29,12 +29,12 @@ class consistentHashing(rpyc.Service):
             config = yaml.safe_load(file)
             self.vNode: int = config["vNodes"]
 
-    def createHash(self, key: str):
+    def _createHash(self, key: str):
         hexHash = (md5(string=key.encode("utf-8"))).hexdigest()
         intHash = int(hexHash, base=16)
         return abs(intHash)
 
-    def createRoutingTable(self) -> None:
+    def _createRoutingTable(self) -> None:
         logging.debug("Creating the routing table for the servers.")
 
         # HACK: can we find a better logic to construct the routing table.
@@ -53,13 +53,13 @@ class consistentHashing(rpyc.Service):
         logging.debug("Routing table sent.")
         logging.debug("------"*4)
 
-    def createRing(self) -> None:
+    def _createRing(self) -> None:
         logging.debug("Creating the ring.")
         for server_info in self.server_list:
             host, port = server_info.split(':')
             for vNodeNumber in range(self.vNode):
                 serverId: str = f"{host}_{port}_{vNodeNumber}"
-                ringIndex: int = self.createHash(serverId)
+                ringIndex: int = self._createHash(serverId)
                 self.ring[ringIndex] = (host, port, vNodeNumber)
         logging.debug("Ring creation done.")
         
@@ -72,7 +72,7 @@ class consistentHashing(rpyc.Service):
                 self.sortedServers.append(server)
         logging.debug("------"*4)
 
-    def binarySearch(self, start, end, targetHash) -> int:
+    def _binarySearch(self, start, end, targetHash) -> int:
         while (start <= end):
             mid = int((end - start) / 2) + start
             if self.sortedServers[mid][0] == targetHash:
@@ -86,13 +86,13 @@ class consistentHashing(rpyc.Service):
             return 0
         return start;   # just the greater one
 
-    def findCoordinatorServer(self, key: str):
+    def _findCoordinatorServer(self, key: str):
         logging.debug("Looking for the coordinator node.")
         
-        keyHash: int = self.createHash(key)
+        keyHash: int = self._createHash(key)
         logging.debug(f"keyHash: {keyHash}")
         length = len(self.sortedServers)
-        index = self.binarySearch(0, length - 1, keyHash)
+        index = self._binarySearch(0, length - 1, keyHash)
         logging.debug(self.sortedServers)
         logging.debug(f"index: {index}")
 
@@ -100,17 +100,29 @@ class consistentHashing(rpyc.Service):
         logging.debug("------"*4)
         return self.ring[self.sortedServers[index][0]]
 
-    def listServers(self) -> None:
+    def _listServers(self) -> None:
         logging.debug("Listing down the servers.")
         for serverIndex, serverInfo in self.ring.items():
             logging.debug(f"{serverIndex} : {serverInfo}")
         logging.debug("Listing completed.")
         logging.debug("------"*4)
 
-    def destory(self) -> None:
+    def _destory(self) -> None:
         self.ring = dict();
         self.sortedServers = list()
         self.server_list: List = list()
+
+    def _ping(self, host, port) -> bool:
+        try:
+            conn = rpyc.connect(host, port)
+            conn.close()
+            logging.debug(f"Ping successful for {host}:{port}")
+            logging.debug("------"*4)
+            return True
+        except Exception as e:
+            logging.error(f"Ping error: {e}")
+            logging.debug("------"*4)
+            return False
 
 
     '''
@@ -128,8 +140,8 @@ class consistentHashing(rpyc.Service):
         """
         try:
             self.server_list = server_list
-            self.createRing()
-            self.listServers()
+            self._createRing()
+            self._listServers()
         except Exception as e:
             logging.error(f"Error: {e}")
             return -1
@@ -146,32 +158,41 @@ class consistentHashing(rpyc.Service):
             int: Status code. 0 for success, 1 if the key is not present, and -1 for failure.
         '''
         logging.debug("Get request received.")
-        coordinatorServer = self.findCoordinatorServer(key)
+        coordinatorServer = self._findCoordinatorServer(key)
         host, port, _ = coordinatorServer
-        # conn = rpyc.connect(host, port)
-        # response = conn.root.get(key)
-        # conn.close()
+        logging.debug(f"Host: {host}, Port: {port}")
+
+        status:int = self._ping(host, port)
+        if (status == False):
+            # need to remove this server from the ring temporarily.
+            # and connect to the nearest server
+            pass
+
+        conn = rpyc.connect(host, port)
+        response = conn.root.get(key)
+        conn.close()
         logging.debug("Get request completed.")
-        return port
+        return response
     
     def exposed_put(self, key: str, value: any) -> int:
         logging.debug("Put request received.")
-        coordinatorServer = self.findCoordinatorServer(key)
+        coordinatorServer = self._findCoordinatorServer(key)
         host, port, _ = coordinatorServer
-        # conn = rpyc.connect(host, port)
-        # response = conn.root.put(key, value)
-        # conn.close()
+        logging.debug(f"Host: {host}, Port: {port}")
+        conn = rpyc.connect(host, port)
+        response = conn.root.put(key, value)
+        conn.close()
         logging.debug("Put request completed.")
-        return 0
+        return response
 
 
 if __name__ == '__main__':
     # serverList: List = ["127.0.0.1:5000", "localhost:7000", "127.0.0.4:9000"]
     # lb = consistentHashing(serverList)
-    # lb.createRing()
+    # lb._createRing()
     # lb.listServers()
     # lb.findCoordinatorServer("123")
-    # lb.createRoutingTable()
+    # lb._createRoutingTable()
 
     port = 5000
     server = ThreadedServer(consistentHashing, port=port)

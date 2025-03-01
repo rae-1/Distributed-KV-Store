@@ -39,20 +39,21 @@ if __name__ == '__main__':
           """)
         choice: int = int(input("enter your choice:"))
         match choice:
-            case 1:
-                server_list = ["127.0.0.1:7000", "127.0.0.4:5000", "localhost:6000"]
-                print(client.kv_init(server_list))
-            case 2:
+            case 1: # init
+                # server_list = ["127.0.0.1:8000", "localhost:9000"]
+                server_list = ["localhost:9000"]
+                response = client.kv_init(server_list)
+                print(f"status_code: {response}")
+            case 2: # GET
                 key = input("Enter the key:")
                 print(client.kv_get(key))
-            case 3:
+            case 3: # PUT
                 key = input("Enter the key:")
                 value = input("Enter the value:")
-                print(client.kv_put(key, value))
-            case 4:
+                status_code = client.kv_put(key, value)
+                print(f"status_code: {status_code}")
+            case 4: # Shutdown
                 client.kv_shutdown()
-            case _:
+            case _: # Exit
                 print("Invalid choice.")
                 break
-
-
