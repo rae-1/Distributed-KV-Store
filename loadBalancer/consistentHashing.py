@@ -24,7 +24,7 @@ logging.basicConfig(level=logging.DEBUG, filename=f"{curPath}/LB.log", filemode=
 class consistentHashing(rpyc.Service):
     def __init__(self):
         self.N: int = 2**128    # MD5 uses 128bits
-        self.ring: Dict[int, any] = dict();
+        self.ring: Dict[int, any] = dict()
         self.sortedServers = list() # (serverHash, (host, port, vNodeNum))
         self.server_list: List = list()
         self.configPath = curPath + "/lb_config.yml"
@@ -41,19 +41,24 @@ class consistentHashing(rpyc.Service):
     def _createRoutingTable(self) -> None:
         logging.debug("Creating the routing table for the servers.")
 
-        # HACK: can we find a better logic to construct the routing table.
+        # Iterate over each server in the sorted list of servers
         for serverIndex in range(len(self.sortedServers)):
             uniqueServers, routingTable = set(), list()
-            for index, serverInfo in enumerate(self.sortedServers):
-                serverInfo = serverInfo[1]
-                if index == serverIndex:
-                    continue
-                host, port, id = serverInfo
+            
+            # Traverse the sortedServers list in a circular manner
+            for i in range(len(self.sortedServers)):
+                index = (serverIndex + i) % len(self.sortedServers)
+                serverInfo = self.sortedServers[index][1]
+                host, port, _ = serverInfo
+                
                 if (host, port) not in uniqueServers:
                     uniqueServers.add((host, port))
                     routingTable.append((host, port))
+            
+            # Log the routing table for the current server
             logging.debug(f"Routing table for {self.sortedServers[serverIndex][1]}: {routingTable}")
-            # TODO: need to send this information
+            # TODO: need to send this information to the servers
+        
         logging.debug("Routing table sent.")
         logging.debug("------"*4)
 
@@ -84,11 +89,11 @@ class consistentHashing(rpyc.Service):
             elif self.sortedServers[mid][0] < targetHash:
                 start = mid + 1
             else:
-                end = mid - 1;
+                end = mid - 1
         
         if start == len(self.sortedServers):
             return 0
-        return start;   # just the greater one
+        return start   # just the greater one
 
     def _findCoordinatorServer(self, key: str):
         logging.debug("Looking for the coordinator node.")
@@ -133,7 +138,7 @@ class consistentHashing(rpyc.Service):
         logging.debug("------"*4)
 
     def _destory(self) -> None:
-        self.ring = dict();
+        self.ring = dict()
         self.sortedServers = list()
         self.server_list: List = list()
 
