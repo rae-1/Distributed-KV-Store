@@ -240,6 +240,22 @@ class consistentHashing(rpyc.Service):
         conn.close()
         logging.debug("Put request completed.")
         return response
+    
+    def exposed_toggle_server(self, host: str, port: int) -> None:
+        """
+        Toggles the server status.
+
+        Args:
+            host (str): Host of the server.
+            port (int): Port of the server.
+        """
+        
+        conn = rpyc.connect(host, int(port))
+        conn.root.exposed_toggle_server()
+        conn.close()
+
+        logging.debug("Server toggled.")
+        logging.debug("------"*4)
 
 
 if __name__ == '__main__':

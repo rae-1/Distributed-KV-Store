@@ -27,7 +27,10 @@ class KVClient():
     def kv_shutdown(self) -> None:
         return self.conn.root.exposed_destroy()
     
-    
+    # For testing
+    def toggle_server(self, host: str, port: int) -> None:
+        return self.conn.root.exposed_toggle_server(host, port)
+
 if __name__ == '__main__':
     client = KVClient()
     
@@ -61,6 +64,10 @@ if __name__ == '__main__':
                 print(f"status_code: {status_code}")
             case 4: # Shutdown
                 client.kv_shutdown()
+            case 5: # Toggle server
+                host = input("Enter the host:")
+                port = int(input("Enter the port:"))
+                client.toggle_server(host, port)
             case _: # Exit
                 print("Invalid choice.")
                 break

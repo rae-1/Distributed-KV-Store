@@ -10,7 +10,8 @@ logging.basicConfig(level=logging.DEBUG, filename=path+"/server.log", filemode='
 class KeyValueStoreService(rpyc.Service):
     def __init__(self):
         self.store = dict()
-        self.routing_table = None
+        # self.routing_table = None
+        self.active : bool = True
 
     def _persist_to_disk(self):
         with open("kv_store_backup.txt", "w") as f:
@@ -73,6 +74,9 @@ class KeyValueStoreService(rpyc.Service):
     def exposed_set_routing_table(self, table):
         self.routing_table = table
         logging.info(f"Received routing table: {self.routing_table}")
+
+    def exposed_toggle_server(self):
+        self.active = not self.active
 
 
 if __name__ == "__main__":
