@@ -21,6 +21,9 @@ logging.basicConfig(level=logging.DEBUG, filename=f"{curPath}/LB.log", filemode=
 # TODO: testbench
 # TODO: VCN: Version Control Number
 
+
+# TODO: (IP, port) mapping: ping, routingTable
+
 class consistentHashing(rpyc.Service):
     def __init__(self):
         self.ring: Dict[int, any] = dict()
@@ -43,6 +46,13 @@ class consistentHashing(rpyc.Service):
         hexHash = (md5(string=key.encode("utf-8"))).hexdigest()
         intHash = int(hexHash, base=16)
         return abs(intHash)
+
+    def _translate_address(self, host, port):
+        # Map localhost:900X to 172.16.238.1X:9000
+        if host == 'localhost' and int(port) >= 9001 and int(port) <= 9005:
+            container_id = int(port) - 9000
+            return f"172.16.238.1{container_id}", 9000
+        return host, port
 
     def _createRoutingTable(self) -> None:
         logging.debug("Creating the routing table for the servers.")
@@ -75,9 +85,10 @@ class consistentHashing(rpyc.Service):
         
         # Send routing tables to each server
         for (host, port), table in routingTables.items():
+            translated_table = [[self._translate_address(h, p) for h, p in entry] for entry in table]
             try:
-                conn = rpyc.connect(host, int(port))
-                conn.root.exposed_set_routing_table(table)
+                conn = rpyc.connect(host, port)
+                conn.root.set_routing_table(translated_table)
                 conn.close()
             except Exception as e:
                 logging.error(f"Failed to send routing table to {host}:{port}: {e}")
@@ -188,7 +199,7 @@ class consistentHashing(rpyc.Service):
         try:
             self.server_list = server_list
             self._createRing()
-            # self._createRoutingTable()
+            self._createRoutingTable()
             self._listServers()
         except Exception as e:
             logging.error(f"Error: {e}")
@@ -227,13 +238,16 @@ class consistentHashing(rpyc.Service):
 
         # Loop through the first N entries in the routing table for the coordinator server
         intended_server_order = self.routingTables[(host, port)][vNodeNum]
+        translated_intended_server_order = [self._translate_address(h, p) for h, p in intended_server_order]
+        logging.debug(f"Intended server order: {translated_intended_server_order}")
+        logging.debug(f"Actual server order: {intended_server_order}")
         for i in range(self.N):
             try:
                 nextHost, nextPort = intended_server_order[i]
                 if self._ping(nextHost, nextPort):
                     logging.debug(f"Coordinator Host: {host}, Port: {port}, vNodeNum: {vNodeNum}")
                     conn = rpyc.connect(nextHost, nextPort)
-                    response = conn.root.get(key, intended_server_order)
+                    response = conn.root.get(key, translated_intended_server_order)
                     conn.close()
                     logging.debug("Get request completed.")
                     return response
