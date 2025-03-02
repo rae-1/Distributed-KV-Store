@@ -53,7 +53,7 @@ if __name__ == '__main__':
                 if status_code == 0:
                     print(f"Value: {value}")
                 else:
-                    print("Key not found.")
+                    print("Key not found!")
                 print(f"status_code: {status_code}")
             case 3: # PUT
                 key = input("Enter the key:")

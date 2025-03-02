@@ -12,6 +12,10 @@ class KeyValueStoreService(rpyc.Service):
         self.store = dict()
         # self.routing_table = None
         self.active : bool = True
+        self.hinted_replica = dict()  # {key: (value, host, port)}
+        self.N = 3
+        self.W = 2
+        self.R = 2
 
     def _persist_to_disk(self):
         with open("kv_store_backup.txt", "w") as f:
