@@ -30,8 +30,9 @@ class KeyValueStoreService(rpyc.Service):
         logging.debug(f"Key: {key}")
         logging.debug("------"*4)
         try:
-            value = self.store.get(key, 1)
-            if (value == 1):
+            value = self.store.get(key, None)
+            if (value == None):
+                logging.debug("Key not found")
                 return (value, 1)
             return (value, 0)
         except Exception as e:

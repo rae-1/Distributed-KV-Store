@@ -10,12 +10,13 @@ class KVClient():
     def __init__(self):
         with open(file="client/client_config.yml", mode='r', encoding="utf-8") as file:
             config = yaml.safe_load(file)
-            self.loadBalancerHost = config["lb_host"]
-            self.loadBalancerPort = config["lb_port"]
-        self.conn = rpyc.connect(self.loadBalancerHost, self.loadBalancerPort)
+            loadBalancerHost = config["lb_host"]
+            loadBalancerPort = config["lb_port"]
+            self.server_list = config["server_list"]
+        self.conn = rpyc.connect(loadBalancerHost, loadBalancerPort)
 
-    def kv_init(self, server_list: list) -> None:
-        return self.conn.root.exposed_init(server_list)
+    def kv_init(self) -> None:
+        return self.conn.root.exposed_init(self.server_list)
 
     def kv_get(self, key: str) -> any:
         return self.conn.root.exposed_get(key)
@@ -24,11 +25,12 @@ class KVClient():
         return self.conn.root.exposed_put(key, value)
 
     def kv_shutdown(self) -> None:
-        return self.conn.root.exposed_destory()
+        return self.conn.root.exposed_destroy()
     
     
 if __name__ == '__main__':
     client = KVClient()
+    
     while True:
         print("""
           Operations:
@@ -40,16 +42,22 @@ if __name__ == '__main__':
         choice: int = int(input("enter your choice:"))
         match choice:
             case 1: # init
-                server_list = ["localhost:9001", "localhost:9002", "localhost:9003", "localhost:9004", "localhost:9005"]
-                response = client.kv_init(server_list)
+                response = client.kv_init()
                 print(f"status_code: {response}")
             case 2: # GET
                 key = input("Enter the key:")
-                print(client.kv_get(key))
+                value, status_code = client.kv_get(key)
+                if status_code == 0:
+                    print(f"Value: {value}")
+                else:
+                    print("Key not found.")
+                print(f"status_code: {status_code}")
             case 3: # PUT
                 key = input("Enter the key:")
                 value = input("Enter the value:")
                 status_code = client.kv_put(key, value)
+                if status_code == 0:
+                    print("Key-Value pair stored successfully.")
                 print(f"status_code: {status_code}")
             case 4: # Shutdown
                 client.kv_shutdown()
