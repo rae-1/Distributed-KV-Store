@@ -12,11 +12,12 @@ logging.basicConfig(level=logging.DEBUG, filename=path+"/server.log", filemode='
 
 class KeyValueStoreService(rpyc.Service):
     def __init__(self):
+        self.routing_table = None
+        self.host = None
+        self.port = None
         self.store = dict()
-        # self.routing_table = None
+        self.hinted_replica = dict()  # {key: (value, host, port)} 
         self.active : bool = True
-        # self.hinted_replica = dict()  # {key: (value, host, port)} 
-        self.hinted_replica = {123: ("dungeon", "172.16.238.15", "9000")}
         self.N = 3
         self.W = 2
         self.R = 2
@@ -55,9 +56,8 @@ class KeyValueStoreService(rpyc.Service):
     def _hinted_handoff_manager(self):
         while True:
             try:
-                # HACK: assuming there is no modification during iteration
                 with self.lock:
-                    pending_servers = [(host, port) for _, host, port in self.hinted_replica.values()]
+                    pending_servers = set((host, port) for _, host, port in self.hinted_replica.values())
 
                 for host, port in pending_servers:
                     logging.debug(f"Checking if {host}:{port} is back online")
@@ -127,6 +127,9 @@ class KeyValueStoreService(rpyc.Service):
         logging.debug("------"*4)
 
         # Find the starting index of (self.host, self.port) in intended_server_order
+        intended_server_order = list(intended_server_order)
+        logging.debug(f"type of intended_server_order {type(intended_server_order)}")
+        logging.debug(f"intended_server_order: {intended_server_order}")
         index = intended_server_order.index((self.host, self.port))
         
         outputs = []
@@ -146,6 +149,7 @@ class KeyValueStoreService(rpyc.Service):
                 else:
                     logging.debug(f"Node {nextHost}:{nextPort} is not active")
                 conn.close()
+                index += 1
             except Exception as e:
                 logging.error(f"Error in Get: {e}")
                 return (None, -1)
@@ -211,8 +215,8 @@ class KeyValueStoreService(rpyc.Service):
     
     def exposed_set_routing_table(self, table):
         self.routing_table = table
-        self.host = table[0][0]
-        self.port = table[0][1]
+        self.host = table[0][0][0]
+        self.port = table[0][0][1]
         logging.info(f"Received routing table: {self.routing_table}")
 
     def exposed_toggle_server(self):
