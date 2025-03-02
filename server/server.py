@@ -38,18 +38,80 @@ class KeyValueStoreService(rpyc.Service):
     '''
         Exposed Endpoints
     '''
-    def exposed_get(self, key):
-        logging.debug(f"Key: {key}")
-        logging.debug("------"*4)
-        try:
+
+    def exposed_fetch(self, key, is_primary):
+        """
+        Fetch a key from either the primary store or the hinted replica.
+        
+        Args:
+            key (str): The key to look up
+            is_primary (bool): If True, check self.store, otherwise check self.hinted_replica
+        
+        Returns:
+            The value associated with the key, or None if not found
+        """
+        logging.debug(f"Fetch request received for key: {key}, is_primary: {is_primary}")
+        
+        if is_primary:
             value = self.store.get(key, None)
-            if (value == None):
-                logging.debug("Key not found")
-                return (value, 1)
-            return (value, 0)
-        except Exception as e:
-            logging.debug(f"Key: {key}")
-            logging.error(f"Error in get: {e}")
+            logging.debug(f"Value found in primary store: {value}")
+        else:
+            value = self.hinted_replica.get(key, None)
+            logging.debug(f"Value found in hinted replica: {value}")
+        
+        logging.debug("------"*4)
+        return value
+
+    def exposed_get(self, key, intended_server_order):
+        logging.debug(f"Get request received for key: {key}")
+        logging.debug("------"*4)
+
+        # Find the starting index of (self.host, self.port) in intended_server_order
+        index = intended_server_order.index((self.host, self.port))
+        
+        outputs = []
+        value = self.store.get(key, None)
+        logging.debug(f"Coordinator {self.host}:{self.port} found value: {value}")
+        outputs.append(value)
+        index += 1
+
+        while index < len(intended_server_order) and len(outputs) < self.N:
+            try:
+                nextHost, nextPort = intended_server_order[index]
+                conn = rpyc.connect(nextHost, nextPort)
+                if conn.root.exposed_ping():
+                    value = conn.root.exposed_fetch(key, index<self.N)
+                    outputs.append(value)
+                    logging.debug(f"Server {nextHost}:{nextPort} returned value: {value}")
+                else:
+                    logging.debug(f"Node {nextHost}:{nextPort} is not active")
+                conn.close()
+            except Exception as e:
+                logging.error(f"Error in Get: {e}")
+                return (None, -1)
+            
+        # Determine the majority value
+        value_counts = {}
+        for value in outputs:
+            if value in value_counts:
+                value_counts[value] += 1
+            else:
+                value_counts[value] = 1
+
+        most_common_value = None
+        max_count = 0
+        for value, count in value_counts.items():
+            if count > max_count:
+                most_common_value = value
+                max_count = count
+
+        if most_common_value is None:
+            return (None, 1)
+        if max_count >= self.R:
+            logging.debug(f"Get request completed with value: {most_common_value}")
+            return (most_common_value, 0)
+        else:
+            logging.error("Failed to fetch the data. No majority value found.")
             return (None, -1)
 
     def exposed_put(self, key, value):
@@ -83,6 +145,8 @@ class KeyValueStoreService(rpyc.Service):
     
     def exposed_set_routing_table(self, table):
         self.routing_table = table
+        self.host = table[0][0]
+        self.port = table[0][1]
         logging.info(f"Received routing table: {self.routing_table}")
 
     def exposed_toggle_server(self):

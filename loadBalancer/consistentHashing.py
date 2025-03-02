@@ -226,13 +226,14 @@ class consistentHashing(rpyc.Service):
         host, port, vNodeNum = coordinatorServer
 
         # Loop through the first N entries in the routing table for the coordinator server
+        intended_server_order = self.routingTables[(host, port)][vNodeNum]
         for i in range(self.N):
             try:
-                nextHost, nextPort = self.routingTables[(host, port)][vNodeNum][i]
+                nextHost, nextPort = intended_server_order[i]
                 if self._ping(nextHost, nextPort):
                     logging.debug(f"Coordinator Host: {host}, Port: {port}, vNodeNum: {vNodeNum}")
                     conn = rpyc.connect(nextHost, nextPort)
-                    response = conn.root.get(key)
+                    response = conn.root.get(key, intended_server_order)
                     conn.close()
                     logging.debug("Get request completed.")
                     return response
