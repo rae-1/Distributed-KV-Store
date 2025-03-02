@@ -41,22 +41,28 @@ class consistentHashing(rpyc.Service):
     def _createRoutingTable(self) -> None:
         logging.debug("Creating the routing table for the servers.")
 
+        # Initialize the routing table dictionary
+        routingTables = { (host, port): [[] for _ in range(self.vNode)] for _, (host, port, _) in self.sortedServers }
+
         # Iterate over each server in the sorted list of servers
         for serverIndex in range(len(self.sortedServers)):
-            uniqueServers, routingTable = set(), list()
-            
+            serverInfo = self.sortedServers[serverIndex][1]
+            host, port, vNodeNum = serverInfo
+
+            uniqueServers = set()
             # Traverse the sortedServers list in a circular manner
             for i in range(len(self.sortedServers)):
                 index = (serverIndex + i) % len(self.sortedServers)
-                serverInfo = self.sortedServers[index][1]
-                host, port, _ = serverInfo
-                
-                if (host, port) not in uniqueServers:
-                    uniqueServers.add((host, port))
-                    routingTable.append((host, port))
-            
-            # Log the routing table for the current server
-            logging.debug(f"Routing table for {self.sortedServers[serverIndex][1]}: {routingTable}")
+                nextServerInfo = self.sortedServers[index][1]
+                nextHost, nextPort, _ = nextServerInfo
+
+                if (nextHost, nextPort) not in uniqueServers:
+                    uniqueServers.add((nextHost, nextPort))
+                    routingTables[(host, port)][vNodeNum].append((nextHost, nextPort))
+
+        # Log the routing tables for each server
+        for (host, port), table in routingTables.items():
+            logging.debug(f"Routing table for {host}:{port}: {table}")
             # TODO: need to send this information to the servers
         
         logging.debug("Routing table sent.")
