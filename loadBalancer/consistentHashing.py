@@ -35,10 +35,10 @@ class consistentHashing(rpyc.Service):
             self.N: int = config["N"]                       # Replication factor
 
     def _createHash(self, key: str, random: bool = False) -> int:
-        if random:
-            # Add some noise to the key to make the outcome more random
-            noise = rnd.randint(0, 2**32)
-            key = f"{key}_{noise}"
+        # if random:
+        #     # Add some noise to the key to make the outcome more random
+        #     noise = rnd.randint(0, 2**32)
+        #     key = f"{key}_{noise}"
 
         hexHash = (md5(string=key.encode("utf-8"))).hexdigest()
         intHash = int(hexHash, base=16)
@@ -188,7 +188,7 @@ class consistentHashing(rpyc.Service):
         try:
             self.server_list = server_list
             self._createRing()
-            self._createRoutingTable()
+            # self._createRoutingTable()
             self._listServers()
         except Exception as e:
             logging.error(f"Error: {e}")
