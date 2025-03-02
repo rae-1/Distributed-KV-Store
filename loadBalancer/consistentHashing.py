@@ -69,7 +69,15 @@ class consistentHashing(rpyc.Service):
         # Log the routing tables for each server
         for (host, port), table in routingTables.items():
             logging.debug(f"Routing table for {host}:{port}: {table}")
-            # TODO: need to send this information to the servers
+        
+        # Send routing tables to each server
+        for (host, port), table in routingTables.items():
+            try:
+                conn = rpyc.connect(host, int(port))
+                conn.root.exposed_set_routing_table(table)
+                conn.close()
+            except Exception as e:
+                logging.error(f"Failed to send routing table to {host}:{port}: {e}")
         
         logging.debug("Routing table sent.")
         logging.debug("------"*4)
@@ -143,11 +151,6 @@ class consistentHashing(rpyc.Service):
         logging.debug("Server added.")
         logging.debug("------"*4)
 
-    def _destory(self) -> None:
-        self.ring = dict()
-        self.sortedServers = list()
-        self.server_list: List = list()
-
     def _ping(self, host, port) -> bool:
         try:
             conn = rpyc.connect(host, port)
@@ -177,9 +180,26 @@ class consistentHashing(rpyc.Service):
         try:
             self.server_list = server_list
             self._createRing()
+            self._createRoutingTable()
             self._listServers()
         except Exception as e:
             logging.error(f"Error: {e}")
+            return -1
+        return 0
+    
+    def exposed_destroy(self) -> int:
+        """
+        Shuts down the connection to a server and frees state.
+
+        Returns:
+            int: Status code indicating success or failure. 0 for success, -1 for failure.
+        """
+        try:
+            self.ring = dict()
+            self.sortedServers = list()
+            self.server_list: List = list()
+        except Exception as e:
+            logging.error(f"Error in destroy: {e}")
             return -1
         return 0
 
