@@ -84,13 +84,7 @@ class consistentHashing(rpyc.Service):
                 self.ring[ringIndex] = (host, port, vNodeNumber)
         logging.debug("Ring creation done.")
         
-        tempSortedServers = sorted(self.ring.items(), key=lambda x: x[0])
-        uniqueServers = set()
-        for server in tempSortedServers:
-            host, port, vNodeNumber = server[1]
-            if (host, port) not in uniqueServers:
-                uniqueServers.add((host, port))
-                self.sortedServers.append(server)
+        self.sortedServers = sorted(self.ring.items(), key=lambda x: x[0])
         logging.debug("------"*4)
 
     def _binarySearch(self, start, end, targetHash) -> int:
