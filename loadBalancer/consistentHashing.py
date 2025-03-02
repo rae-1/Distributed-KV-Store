@@ -2,7 +2,7 @@ import os
 import logging
 import yaml
 import rpyc
-
+import random as rnd
 from hashlib import md5
 from typing import Dict, List
 from rpyc.utils.server import ThreadedServer
@@ -32,8 +32,14 @@ class consistentHashing(rpyc.Service):
         with open(file=self.configPath, mode='r', encoding="utf-8") as file:
             config = yaml.safe_load(file)
             self.vNode: int = config["vNodes"]
+            self.hashRandom: bool = config["hashRandom"]
 
-    def _createHash(self, key: str):
+    def _createHash(self, key: str, random: bool = False) -> int:
+        if random:
+            # Add some noise to the key to make the outcome more random
+            noise = rnd.randint(0, 2**32)
+            key = f"{key}_{noise}"
+
         hexHash = (md5(string=key.encode("utf-8"))).hexdigest()
         intHash = int(hexHash, base=16)
         return abs(intHash)
@@ -74,7 +80,7 @@ class consistentHashing(rpyc.Service):
             host, port = server_info.split(':')
             for vNodeNumber in range(self.vNode):
                 serverId: str = f"{host}_{port}_{vNodeNumber}"
-                ringIndex: int = self._createHash(serverId)
+                ringIndex: int = self._createHash(serverId, self.hashRandom)
                 self.ring[ringIndex] = (host, port, vNodeNumber)
         logging.debug("Ring creation done.")
         
