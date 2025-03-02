@@ -2,6 +2,7 @@ import rpyc
 import logging
 import yaml
 import os
+import threading
 from rpyc.utils.server import ThreadedServer
 
 path = os.path.dirname(os.path.abspath(__file__))
@@ -20,6 +21,11 @@ class KeyValueStoreService(rpyc.Service):
     def _persist_to_disk(self):
         with open("kv_store_backup.txt", "w") as f:
             f.write(str(self.store))
+
+    def _async_persist_to_dist(self):
+        thread = threading.Thread(target=self._persist_to_disk)
+        thread.daemon = True
+        thread.start()
 
     def _load_from_disk(self):
         try:
@@ -44,7 +50,7 @@ class KeyValueStoreService(rpyc.Service):
         except Exception as e:
             logging.debug(f"Key: {key}")
             logging.error(f"Error in get: {e}")
-            return (value, -1)
+            return (None, -1)
 
     def exposed_put(self, key, value):
         logging.debug(f"Key: {key}, Value: {value}")
@@ -54,7 +60,7 @@ class KeyValueStoreService(rpyc.Service):
                 return -1
             # in any other case, we can proceed with the put operation
             self.store[key] = value
-            self._persist_to_disk()
+            self._async_persist_to_disk()
             logging.debug(f"key stored and persisted")
             logging.debug("------"*4)
             return status_code
@@ -68,7 +74,7 @@ class KeyValueStoreService(rpyc.Service):
     def exposed_delete(self, key):
         if key in self.store:
             del self.store[key]
-            self._persist_to_disk()
+            self._async_persist_to_dist()
             return f"Deleted {key}"
         return "Key not found"
 
@@ -81,6 +87,9 @@ class KeyValueStoreService(rpyc.Service):
 
     def exposed_toggle_server(self):
         self.active = not self.active
+
+    def exposed_ping(self):
+        return self.active
 
 
 if __name__ == "__main__":

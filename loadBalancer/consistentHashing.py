@@ -157,7 +157,12 @@ class consistentHashing(rpyc.Service):
     def _ping(self, host, port) -> bool:
         try:
             conn = rpyc.connect(host, port)
+            response = conn.root.ping()
             conn.close()
+            if response != True:
+                logging.debug(f"Server {host}:{port} is not active.")
+                logging.debug("------"*4)
+                return False
             logging.debug(f"Ping successful for {host}:{port}")
             logging.debug("------"*4)
             return True
