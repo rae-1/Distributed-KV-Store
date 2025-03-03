@@ -39,6 +39,7 @@ class KeyValueStoreService(rpyc.Service):
                 self.store = eval(f.read())
         except FileNotFoundError:
             self.store = {}
+
     def ping_actual_server(self, host, port, timeout=0.5):
         try:
             conn = rpyc.connect(host, port, config={"sync_request_timeout": timeout})
@@ -47,12 +48,18 @@ class KeyValueStoreService(rpyc.Service):
         except Exception as e:
             return False
 
+    '''
+    /////////////////// Hinted Handoff /////////////////
+    '''
+    
+    # Start the hinted handoff manager in the background
     def _start_hinted_handoff_manager(self):
         thread = threading.Thread(target=self._hinted_handoff_manager)
         thread.daemon = True
         thread.start()
         logging.info("Hinted Handoff Manager started in the background")
 
+    # Check if the server is back online and process the hinted handoff
     def _hinted_handoff_manager(self):
         while True:
             try:
@@ -70,6 +77,7 @@ class KeyValueStoreService(rpyc.Service):
             # sleep for 10 seconds before checking again
             time.sleep(10)
 
+    # Process the hinted handoff for the given server
     def _process_hinted_handoff(self, host, port):
         keys_to_remove = []
         with self.lock:
@@ -94,6 +102,10 @@ class KeyValueStoreService(rpyc.Service):
                 self.hinted_replica.pop(key, None)
         logging.debug("------"*4)
 
+    '''
+    //////////////////////////////////////////////////////
+    '''
+
 
     '''
         Exposed Endpoints
@@ -101,7 +113,7 @@ class KeyValueStoreService(rpyc.Service):
 
     def exposed_fetch(self, key, is_primary):
         """
-        Fetch a key from either the primary store or the hinted replica.
+        Fetch the key's value from either the primary store or the hinted replica.
         
         Args:
             key (str): The key to look up
@@ -123,6 +135,17 @@ class KeyValueStoreService(rpyc.Service):
         return value
 
     def exposed_get(self, key, intended_server_order):
+        """
+        Fetch the key's value from the distributed store.
+
+        Args:
+            key (str): The key to fetch
+            intended_server_order (list): The order of servers to fetch the key from
+
+        Returns:
+            tuple: (value, status_code)
+        """
+
         logging.debug(f"Get request received for key: {key}")
         logging.debug("------"*4)
 
@@ -152,7 +175,6 @@ class KeyValueStoreService(rpyc.Service):
                 conn.close()
             except Exception as e:
                 logging.error(f"Error in Get: {e}")
-                # return (None, -1)
             index += 1
             
         # Determine the majority value
@@ -221,6 +243,7 @@ class KeyValueStoreService(rpyc.Service):
         except Exception as e:
             logging.error(f"Error in Put: {e}")
             return -1
+        
     """
     def exposed_coordinator_put(self, key, value, intended_server_order):
         logging.debug(f"Coordinator put request received for key: {key}")
@@ -318,11 +341,23 @@ class KeyValueStoreService(rpyc.Service):
         
     # """
     def exposed_coordinator_put(self, key, value, replica_servers):
+        """
+        Store a key-value pair in the appropriate store.
+
+        Args:
+            key (str): The key to store
+            value: The value to store
+            replica_servers (list): List of replica servers
+
+        Returns:
+            int: 0 if key already existed, 1 if key is new, -1 on failure
+        """
+        
         logging.debug(f"Choosen as coordinator for key: {key}. Now, performing replication.")
         
         success_count = 1
         quorum_event = threading.Event()  # Event to signal when quorum is reached
-        exists = 1  # dummy value assuming it exists
+        exists = 0 if key in self.store else 1
 
         logging.debug("Quorum event initialized")
         
@@ -337,8 +372,8 @@ class KeyValueStoreService(rpyc.Service):
                 if target_info:
                     target_host, target_port = target_info
                     result = conn.root.put(key, value, target_host, target_port)
+                # Regular put operation
                 else:
-                    # Regular put operation
                     result = conn.root.put(key, value)
                 
                 if result != -1:
@@ -431,21 +466,10 @@ class KeyValueStoreService(rpyc.Service):
 
         executor.shutdown(wait=False, cancel_futures=True)
 
-            # # If we need more successes to reach quorum
-            # if success_count < self.W:
-            #     # Wait for quorum event with timeout
-            #     quorum_reached = quorum_event.wait(timeout=5.0)
-                
-            #     if not quorum_reached:
-            #         logging.error(f"Failed to reach write quorum for key: {key}")
-            #         return -1
-        
-        # Return true if quorum was reached
-        # return success_count >= self.W
         if success_count >= self.W:
             return exists
         return -1
-    # """
+
 
     def exposed_delete(self, key):
         if key in self.store:
@@ -457,6 +481,7 @@ class KeyValueStoreService(rpyc.Service):
     def exposed_list_keys(self):
         return list(self.store.keys())
     
+    # Receive routing table and server details from the request-router
     def exposed_set_routing_table(self, table):
         self.routing_table = table
         self.host = table[0][0][0]
@@ -466,25 +491,6 @@ class KeyValueStoreService(rpyc.Service):
     def exposed_toggle_server(self):
         self.active = not self.active
     
-    
-    '''
-    ////////////////////////////////////////////////////
-    /////////////////// Hinted Handoff /////////////////
-    ////////////////////////////////////////////////////
-    '''
-    
-        
-    def exposed_store_hinted_handoff(self, key, value, target_host, target_port):
-        self.hinted_replica[key] = (value, target_host, target_port)
-        logging.debug(f"Stored hinted handoff for key {key} intended for {target_host}:{target_port}")
-        logging.debug("------"*4)
-        return True
-    '''
-    //////////////////////////////////////////////////////
-    //////////////////////////////////////////////////////
-    //////////////////////////////////////////////////////
-    '''
-
     def exposed_ping(self):
         '''
             To simulate a server down scenario

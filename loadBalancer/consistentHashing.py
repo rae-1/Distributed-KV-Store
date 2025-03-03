@@ -10,23 +10,9 @@ from rpyc.utils.server import ThreadedServer
 curPath: str = os.path.dirname(os.path.abspath(__file__))
 logging.basicConfig(level=logging.DEBUG, filename=f"{curPath}/LB.log", filemode='w')
 
-
-
-# NOTE: mapping to ring > done
-# NOTE: finding the coordinator node > done
-# NOTE: generating the routing table for each server > done
-# NOTE: (IP, port) mapping: routingTable, intendedServerList > done
-# NOTE: sending the routing table to the servers > done
-# NOTE: integration with the server > done
-# NOTE: hinted handoff > done
-# NOTE: persistance using txt file > done
-
-# TODO: testbench
-# TODO: SQL integration ()
-# TODO: VCN: Version Control Number
-
-
-
+# Request-Router/ Load Balancer class
+# Implements a consistent hashing mechanism for a distributed key-value store.
+# It provides methods to manage the ring of servers, create routing tables, and handle client requests
 class consistentHashing(rpyc.Service):
     def __init__(self):
         self.ring: Dict[int, any] = dict()
@@ -50,6 +36,7 @@ class consistentHashing(rpyc.Service):
         intHash = int(hexHash, base=16)
         return abs(intHash)
 
+    # Translates localhost addresses to container addresses.
     def _translate_address(self, host, port):
         # Map localhost:900X to 172.16.238.1X:9000
         if host == 'localhost' and int(port) >= 9001 and int(port) <= 9005:
@@ -57,6 +44,7 @@ class consistentHashing(rpyc.Service):
             return f"172.16.238.1{container_id}", 9000
         return host, port
 
+    # Create the preference list for the nodes
     def _createRoutingTable(self) -> None:
         logging.debug("Creating the routing table for the servers.")
 
@@ -99,6 +87,9 @@ class consistentHashing(rpyc.Service):
         logging.debug("Routing table sent.")
         logging.debug("------"*4)
 
+    # Create the consistent hashing ring with virtual nodes
+    # Each server is assigned multiple virtual nodes to distribute the load more evenly
+    # The ring is sorted based on the hash values of the virtual nodes
     def _createRing(self) -> None:
         logging.debug("Creating the ring.")
         for server_info in self.server_list:
@@ -113,6 +104,7 @@ class consistentHashing(rpyc.Service):
         logging.debug(f"Sorted servers: {self.sortedServers}")
         logging.debug("------"*4)
 
+    # Performs optimum search to find the closest server for the given hash.
     def _binarySearch(self, start, end, targetHash) -> int:
         logging.debug(f"{start} {end}")
         while (start <= end):
@@ -131,6 +123,7 @@ class consistentHashing(rpyc.Service):
             return 0
         return start   # just the greater one
 
+    # Finds the next server for the given key in the ring.
     def _findCoordinatorServer(self, key: str):
         logging.debug("Looking for the coordinator node.")
         
@@ -171,6 +164,7 @@ class consistentHashing(rpyc.Service):
         logging.debug("Server added.")
         logging.debug("------"*4)
 
+    # Pings a server to check if it is active.
     def _ping(self, host, port) -> bool:
         try:
             conn = rpyc.connect(host, port)
