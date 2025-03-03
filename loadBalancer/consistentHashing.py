@@ -10,19 +10,22 @@ from rpyc.utils.server import ThreadedServer
 curPath: str = os.path.dirname(os.path.abspath(__file__))
 logging.basicConfig(level=logging.DEBUG, filename=f"{curPath}/LB.log", filemode='w')
 
+
+
 # NOTE: mapping to ring > done
 # NOTE: finding the coordinator node > done
 # NOTE: generating the routing table for each server > done
-# TODO: sending the routing table to the servers
-# TODO: integration with the server
+# NOTE: (IP, port) mapping: routingTable, intendedServerList > done
+# NOTE: sending the routing table to the servers > done
+# NOTE: integration with the server > done
+# NOTE: hinted handoff > done
+# NOTE: persistance using txt file > done
 
-# TODO: SQL integration
-# TODO: hinted handoff
 # TODO: testbench
+# TODO: SQL integration ()
 # TODO: VCN: Version Control Number
 
 
-# TODO: (IP, port) mapping: ping, routingTable
 
 class consistentHashing(rpyc.Service):
     def __init__(self):
@@ -107,9 +110,11 @@ class consistentHashing(rpyc.Service):
         logging.debug("Ring creation done.")
         
         self.sortedServers = sorted(self.ring.items(), key=lambda x: x[0])
+        logging.debug(f"Sorted servers: {self.sortedServers}")
         logging.debug("------"*4)
 
     def _binarySearch(self, start, end, targetHash) -> int:
+        logging.debug(f"{start} {end}")
         while (start <= end):
             mid = int((end - start) / 2) + start
             if self.sortedServers[mid][0] == targetHash:
@@ -118,6 +123,9 @@ class consistentHashing(rpyc.Service):
                 start = mid + 1
             else:
                 end = mid - 1
+
+        logging.debug(f"{start}")
+        logging.debug(f"{self.sortedServers}")
         
         if start == len(self.sortedServers):
             return 0
@@ -130,11 +138,9 @@ class consistentHashing(rpyc.Service):
         logging.debug(f"keyHash: {keyHash}")
         length = len(self.sortedServers)
         index = self._binarySearch(0, length - 1, keyHash)
-        logging.debug(self.sortedServers)
         logging.debug(f"index: {index}")
 
         logging.debug("Coordinator node found.")
-        logging.debug("------"*4)
         return self.ring[self.sortedServers[index][0]]
 
     def _listServers(self) -> None:
@@ -250,9 +256,11 @@ class consistentHashing(rpyc.Service):
                     response = conn.root.get(key, translated_intended_server_order)
                     conn.close()
                     logging.debug("Get request completed.")
+                    logging.debug("------"*4)
                     return response
                 else:
                     logging.debug(f"Server {nextHost}:{nextPort} is not active.")
+                    logging.debug("------"*4)
             except IndexError:
                 logging.error(f"Not enough entries in the routing table for {host}:{port}")
                 break
@@ -260,6 +268,7 @@ class consistentHashing(rpyc.Service):
                 logging.error(f"Error connecting to server {nextHost}:{nextPort}: {e}")
 
         logging.error("Failed to fetch the data. No active servers available.")
+        logging.debug("------"*4)
         return (None,-1)
     
     def exposed_put(self, key: str, value: any) -> int:
@@ -313,7 +322,7 @@ class consistentHashing(rpyc.Service):
         """
         
         conn = rpyc.connect(host, int(port))
-        conn.root.exposed_toggle_server()
+        conn.root.toggle_server()
         conn.close()
 
         logging.debug("Server toggled.")

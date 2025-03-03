@@ -28,7 +28,7 @@ class KeyValueStoreService(rpyc.Service):
         with open("kv_store_backup.txt", "w") as f:
             f.write(str(self.store))
 
-    def _async_persist_to_dist(self):
+    def _async_persist_to_disk(self):
         thread = threading.Thread(target=self._persist_to_disk)
         thread.daemon = True
         thread.start()
@@ -39,9 +39,9 @@ class KeyValueStoreService(rpyc.Service):
                 self.store = eval(f.read())
         except FileNotFoundError:
             self.store = {}
-    def ping_actual_server(self, host, port):
+    def ping_actual_server(self, host, port, timeout=0.5):
         try:
-            conn = rpyc.connect(host, port)
+            conn = rpyc.connect(host, port, config={"sync_request_timeout": timeout})
             conn.close()
             return True
         except Exception as e:
@@ -116,7 +116,7 @@ class KeyValueStoreService(rpyc.Service):
             value = self.store.get(key, None)
             logging.debug(f"Value found in primary store: {value}")
         else:
-            value = self.hinted_replica.get(key, None)
+            value = self.hinted_replica.get(key, None)[0]
             logging.debug(f"Value found in hinted replica: {value}")
         
         logging.debug("------"*4)
@@ -141,6 +141,7 @@ class KeyValueStoreService(rpyc.Service):
         while index < len(intended_server_order) and len(outputs) < self.N:
             try:
                 nextHost, nextPort = intended_server_order[index]
+                logging.debug(f"nextHost, nextPort: {nextHost}, {nextPort}")
                 conn = rpyc.connect(nextHost, nextPort)
                 if conn.root.ping():
                     value = conn.root.fetch(key, index<self.N)
@@ -149,10 +150,10 @@ class KeyValueStoreService(rpyc.Service):
                 else:
                     logging.debug(f"Node {nextHost}:{nextPort} is not active")
                 conn.close()
-                index += 1
             except Exception as e:
                 logging.error(f"Error in Get: {e}")
-                return (None, -1)
+                # return (None, -1)
+            index += 1
             
         # Determine the majority value
         value_counts = {}
@@ -161,6 +162,8 @@ class KeyValueStoreService(rpyc.Service):
                 value_counts[value] += 1
             else:
                 value_counts[value] = 1
+
+        logging.debug(f"Value counts: {value_counts}")
 
         most_common_value = None
         max_count = 0
@@ -209,7 +212,7 @@ class KeyValueStoreService(rpyc.Service):
                 # Regular put operation
                 exists = key in self.store
                 self.store[key] = value
-                self._async_persist_to_dist()
+                self._async_persist_to_disk()
                 logging.debug(f"Stored key {key} with value {value}")
             
             logging.debug("------"*4)
@@ -218,7 +221,7 @@ class KeyValueStoreService(rpyc.Service):
         except Exception as e:
             logging.error(f"Error in Put: {e}")
             return -1
-
+    """
     def exposed_coordinator_put(self, key, value, intended_server_order):
         logging.debug(f"Coordinator put request received for key: {key}")
         logging.debug("------"*4)
@@ -258,7 +261,7 @@ class KeyValueStoreService(rpyc.Service):
                 if index < self.N:
                     # This is a primary node, send direct put request
                     logging.debug(f"Sending direct put request to {nextHost}:{nextPort}")
-                    response = conn.root.exposed_put(key, value)
+                    response = conn.root.put(key, value)
                     
                     if response == -2:
                         # Server reported it's not active
@@ -277,7 +280,7 @@ class KeyValueStoreService(rpyc.Service):
                     if failed_nodes:
                         failed_host, failed_port = failed_nodes.pop(0)
                         logging.debug(f"Sending hinted handoff for {failed_host}:{failed_port} to {nextHost}:{nextPort}")
-                        response = conn.root.exposed_put(key, value, failed_host, failed_port)
+                        response = conn.root.put(key, value, failed_host, failed_port)
                         
                         if response == -2:
                             # Server reported it's not active
@@ -307,15 +310,147 @@ class KeyValueStoreService(rpyc.Service):
         # 7. If success_count>0, then update the key's value in self.store and persist storage
         if success_count > 0:
             self.store[key] = value
-            self._async_persist_to_dist()
+            self._async_persist_to_disk()
             return exists
         else:
             return -1
+    """
+        
+    # """
+    def exposed_coordinator_put(self, key, value, replica_servers):
+        logging.debug(f"Choosen as coordinator for key: {key}. Now, performing replication.")
+        
+        success_count = 1
+        quorum_event = threading.Event()  # Event to signal when quorum is reached
+        exists = 1  # dummy value assuming it exists
+
+        logging.debug("Quorum event initialized")
+        
+        def replicate_to_server(host, port, target_info=None):
+            nonlocal success_count
+            nonlocal exists
+            try:
+                logging.debug(f"Pinging to {host}:{port}")
+                conn = rpyc.connect(host, port)
+                
+                # If target_info is provided, this is a hinted handoff
+                if target_info:
+                    target_host, target_port = target_info
+                    result = conn.root.put(key, value, target_host, target_port)
+                else:
+                    # Regular put operation
+                    result = conn.root.put(key, value)
+                
+                if result != -1:
+                    with self.lock:
+                        exists *= result
+                        success_count += 1
+                        if success_count >= self.W:
+                            logging.debug(f"Write quorum reached for key: {key}")
+                            quorum_event.set()  # Signal that quorum is reached
+                if quorum_event.is_set():
+                    return True
+                return True
+            
+            except Exception as e:
+                logging.error(f"Failed to replicate to {host}:{port}: {e}")
+                return False
+    
+        up_servers, down_servers = list(), list()
+        replica_servers = list(replica_servers)
+        index = replica_servers.index((self.host, self.port))
+
+        logging.debug("Filling up_servers and down_servers")
+        for servers in range(index):
+            down_servers.append(replica_servers[servers])
+
+        for i in range(index + 1, len(replica_servers)):
+            logging.debug(f"Checking server {i}")
+            try:
+                if i == index:
+                    logging.debug(f"Skipping current server {self.host}:{self.port}")
+                    continue    # Skip the current server
+                host, port = replica_servers[i]
+                logging.debug(f"Pinging {host}:{port}")
+                if self.ping_actual_server(host, port):
+                    logging.debug(f"Server {host}:{port} is up")
+                    up_servers.append((i, host, port))
+                else:
+                    down_servers.append((i, host, port))
+            except Exception as e:
+                down_servers.append((i, host, port))
+
+        logging.debug(f"Down servers: {down_servers}")
+        logging.debug(f"up servers: {up_servers}")
+
+        if len(up_servers) < self.W:
+            logging.error(f"Failed to reach write quorum for key: {key}")
+            return -1
+        
+        # Checking if the current server is one of the intended servers
+        logging.debug(f"Storing in either store or hinted_replicas")
+        if index <= self.N:
+            self.store[key] = value
+            self._async_persist_to_disk()
+        else:
+            host, port = replica_servers[0]
+            self.hinted_replica[key] = (value, host, port)
+            logging.debug(f"Stored hinted handoff for key {key} intended for {host}:{port}")
+
+
+        active_count = 0
+        replication_tasks = dict()
+        for i, host, port in up_servers:
+            if i < self.N:
+                logging.debug(f"i, N: {i}, {self.N}")
+                replication_tasks[(host, port)] = None
+                active_count += 1
+            elif active_count < self.N - 1:
+                # this will always work. Since, if it is not one of the intended servers,
+                # then there must be one down_node infront of it and that server is intended one.
+                logging.debug(f"active_count, N: {active_count}, {self.N}")
+                logging.debug(f"len(down_servers): {len(down_servers)}")
+                front_server = down_servers.pop(0)
+                print(f"front_server: {front_server}")
+                front_server = front_server[1:]
+                replication_tasks[(host, port)] = front_server
+                active_count += 1
+        
+        
+        logging.debug("Sending replicas asynchronously")
+        # with concurrent.futures.ThreadPoolExecutor(max_workers=len(replication_tasks)) as executor:
+        executor = concurrent.futures.ThreadPoolExecutor(max_workers=len(replication_tasks))
+        futures = [
+            executor.submit(replicate_to_server, host, port, target_info) 
+            for (host, port), target_info in replication_tasks.items()
+        ]
+        
+        for future in concurrent.futures.as_completed(futures):
+            if success_count >= self.W:
+                break
+
+        executor.shutdown(wait=False, cancel_futures=True)
+
+            # # If we need more successes to reach quorum
+            # if success_count < self.W:
+            #     # Wait for quorum event with timeout
+            #     quorum_reached = quorum_event.wait(timeout=5.0)
+                
+            #     if not quorum_reached:
+            #         logging.error(f"Failed to reach write quorum for key: {key}")
+            #         return -1
+        
+        # Return true if quorum was reached
+        # return success_count >= self.W
+        if success_count >= self.W:
+            return exists
+        return -1
+    # """
 
     def exposed_delete(self, key):
         if key in self.store:
             del self.store[key]
-            self._async_persist_to_dist()
+            self._async_persist_to_disk()
             return f"Deleted {key}"
         return "Key not found"
 
