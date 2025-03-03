@@ -1,2 +1,8 @@
 lb_host: localhost
 lb_port: 5000
+server_list:
+  - localhost:9001
+  - localhost:9002
+  - localhost:9003
+  - localhost:9004
+  - localhost:9005

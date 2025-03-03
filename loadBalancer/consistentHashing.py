@@ -2,7 +2,7 @@ import os
 import logging
 import yaml
 import rpyc
-
+import random as rnd
 from hashlib import md5
 from typing import Dict, List
 from rpyc.utils.server import ThreadedServer
@@ -10,50 +10,92 @@ from rpyc.utils.server import ThreadedServer
 curPath: str = os.path.dirname(os.path.abspath(__file__))
 logging.basicConfig(level=logging.DEBUG, filename=f"{curPath}/LB.log", filemode='w')
 
+
+
 # NOTE: mapping to ring > done
 # NOTE: finding the coordinator node > done
 # NOTE: generating the routing table for each server > done
-# TODO: sending the routing table to the servers
-# TODO: integration with the server
+# NOTE: (IP, port) mapping: routingTable, intendedServerList > done
+# NOTE: sending the routing table to the servers > done
+# NOTE: integration with the server > done
+# NOTE: hinted handoff > done
+# NOTE: persistance using txt file > done
 
-# TODO: SQL integration
-# TODO: hinted handoff
 # TODO: testbench
+# TODO: SQL integration ()
 # TODO: VCN: Version Control Number
+
+
 
 class consistentHashing(rpyc.Service):
     def __init__(self):
-        self.N: int = 2**128    # MD5 uses 128bits
-        self.ring: Dict[int, any] = dict();
-        self.sortedServers = list() # (serverHash, (host, port, vNodeNum))
+        self.ring: Dict[int, any] = dict()
+        self.sortedServers = list()                         # (serverHash, (host, port, vNodeNum))
         self.server_list: List = list()
         self.configPath = curPath + "/lb_config.yml"
 
         with open(file=self.configPath, mode='r', encoding="utf-8") as file:
             config = yaml.safe_load(file)
             self.vNode: int = config["vNodes"]
+            self.hashRandom: bool = config["hashRandom"]
+            self.N: int = config["N"]                       # Replication factor
 
-    def _createHash(self, key: str):
+    def _createHash(self, key: str, random: bool = False) -> int:
+        # if random:
+        #     # Add some noise to the key to make the outcome more random
+        #     noise = rnd.randint(0, 2**32)
+        #     key = f"{key}_{noise}"
+
         hexHash = (md5(string=key.encode("utf-8"))).hexdigest()
         intHash = int(hexHash, base=16)
         return abs(intHash)
 
+    def _translate_address(self, host, port):
+        # Map localhost:900X to 172.16.238.1X:9000
+        if host == 'localhost' and int(port) >= 9001 and int(port) <= 9005:
+            container_id = int(port) - 9000
+            return f"172.16.238.1{container_id}", 9000
+        return host, port
+
     def _createRoutingTable(self) -> None:
         logging.debug("Creating the routing table for the servers.")
 
-        # HACK: can we find a better logic to construct the routing table.
+        # Initialize the routing table dictionary
+        routingTables = { (host, port): [[] for _ in range(self.vNode)] for _, (host, port, _) in self.sortedServers }
+
+        # Iterate over each server in the sorted list of servers
         for serverIndex in range(len(self.sortedServers)):
-            uniqueServers, routingTable = set(), list()
-            for index, serverInfo in enumerate(self.sortedServers):
-                serverInfo = serverInfo[1]
-                if index == serverIndex:
-                    continue
-                host, port, id = serverInfo
-                if (host, port) not in uniqueServers:
-                    uniqueServers.add((host, port))
-                    routingTable.append((host, port))
-            logging.debug(f"Routing table for {self.sortedServers[serverIndex][1]}: {routingTable}")
-            # TODO: need to send this information
+            serverInfo = self.sortedServers[serverIndex][1]
+            host, port, vNodeNum = serverInfo
+
+            uniqueServers = set()
+            # Traverse the sortedServers list in a circular manner
+            for i in range(len(self.sortedServers)):
+                index = (serverIndex + i) % len(self.sortedServers)
+                nextServerInfo = self.sortedServers[index][1]
+                nextHost, nextPort, _ = nextServerInfo
+
+                if (nextHost, nextPort) not in uniqueServers:
+                    uniqueServers.add((nextHost, nextPort))
+                    routingTables[(host, port)][vNodeNum].append((nextHost, nextPort))
+
+        # Log the routing tables for each server
+        for (host, port), table in routingTables.items():
+            logging.debug(f"Routing table for {host}:{port}: {table}")
+
+        # Store the routing tables
+        self.routingTables = routingTables
+        
+        # Send routing tables to each server
+        for (host, port), table in routingTables.items():
+            translated_table = [[self._translate_address(h, p) for h, p in entry] for entry in table]
+            try:
+                conn = rpyc.connect(host, port)
+                conn.root.set_routing_table(translated_table)
+                conn.close()
+            except Exception as e:
+                logging.error(f"Failed to send routing table to {host}:{port}: {e}")
+        
         logging.debug("Routing table sent.")
         logging.debug("------"*4)
 
@@ -63,20 +105,16 @@ class consistentHashing(rpyc.Service):
             host, port = server_info.split(':')
             for vNodeNumber in range(self.vNode):
                 serverId: str = f"{host}_{port}_{vNodeNumber}"
-                ringIndex: int = self._createHash(serverId)
+                ringIndex: int = self._createHash(serverId, self.hashRandom)
                 self.ring[ringIndex] = (host, port, vNodeNumber)
         logging.debug("Ring creation done.")
         
-        tempSortedServers = sorted(self.ring.items(), key=lambda x: x[0])
-        uniqueServers = set()
-        for server in tempSortedServers:
-            host, port, vNodeNumber = server[1]
-            if (host, port) not in uniqueServers:
-                uniqueServers.add((host, port))
-                self.sortedServers.append(server)
+        self.sortedServers = sorted(self.ring.items(), key=lambda x: x[0])
+        logging.debug(f"Sorted servers: {self.sortedServers}")
         logging.debug("------"*4)
 
     def _binarySearch(self, start, end, targetHash) -> int:
+        logging.debug(f"{start} {end}")
         while (start <= end):
             mid = int((end - start) / 2) + start
             if self.sortedServers[mid][0] == targetHash:
@@ -84,11 +122,14 @@ class consistentHashing(rpyc.Service):
             elif self.sortedServers[mid][0] < targetHash:
                 start = mid + 1
             else:
-                end = mid - 1;
+                end = mid - 1
+
+        logging.debug(f"{start}")
+        logging.debug(f"{self.sortedServers}")
         
         if start == len(self.sortedServers):
             return 0
-        return start;   # just the greater one
+        return start   # just the greater one
 
     def _findCoordinatorServer(self, key: str):
         logging.debug("Looking for the coordinator node.")
@@ -97,11 +138,9 @@ class consistentHashing(rpyc.Service):
         logging.debug(f"keyHash: {keyHash}")
         length = len(self.sortedServers)
         index = self._binarySearch(0, length - 1, keyHash)
-        logging.debug(self.sortedServers)
         logging.debug(f"index: {index}")
 
         logging.debug("Coordinator node found.")
-        logging.debug("------"*4)
         return self.ring[self.sortedServers[index][0]]
 
     def _listServers(self) -> None:
@@ -132,15 +171,15 @@ class consistentHashing(rpyc.Service):
         logging.debug("Server added.")
         logging.debug("------"*4)
 
-    def _destory(self) -> None:
-        self.ring = dict();
-        self.sortedServers = list()
-        self.server_list: List = list()
-
     def _ping(self, host, port) -> bool:
         try:
             conn = rpyc.connect(host, port)
+            response = conn.root.ping()
             conn.close()
+            if response != True:
+                logging.debug(f"Server {host}:{port} is not active.")
+                logging.debug("------"*4)
+                return False
             logging.debug(f"Ping successful for {host}:{port}")
             logging.debug("------"*4)
             return True
@@ -166,9 +205,26 @@ class consistentHashing(rpyc.Service):
         try:
             self.server_list = server_list
             self._createRing()
+            self._createRoutingTable()
             self._listServers()
         except Exception as e:
             logging.error(f"Error: {e}")
+            return -1
+        return 0
+    
+    def exposed_destroy(self) -> int:
+        """
+        Shuts down the connection to a server and frees state.
+
+        Returns:
+            int: Status code indicating success or failure. 0 for success, -1 for failure.
+        """
+        try:
+            self.ring = dict()
+            self.sortedServers = list()
+            self.server_list: List = list()
+        except Exception as e:
+            logging.error(f"Error in destroy: {e}")
             return -1
         return 0
 
@@ -184,31 +240,93 @@ class consistentHashing(rpyc.Service):
         '''
         logging.debug("Get request received.")
         coordinatorServer = self._findCoordinatorServer(key)
-        host, port, _ = coordinatorServer
-        logging.debug(f"Host: {host}, Port: {port}")
+        host, port, vNodeNum = coordinatorServer
 
-        status:int = self._ping(host, port)
-        if (status == False):
-            # need to remove this server from the ring temporarily.
-            # and connect to the nearest server
-            pass
+        # Loop through the first N entries in the routing table for the coordinator server
+        intended_server_order = self.routingTables[(host, port)][vNodeNum]
+        translated_intended_server_order = [self._translate_address(h, p) for h, p in intended_server_order]
+        logging.debug(f"Intended server order: {translated_intended_server_order}")
+        logging.debug(f"Actual server order: {intended_server_order}")
+        for i in range(self.N):
+            try:
+                nextHost, nextPort = intended_server_order[i]
+                if self._ping(nextHost, nextPort):
+                    logging.debug(f"Coordinator Host: {host}, Port: {port}, vNodeNum: {vNodeNum}")
+                    conn = rpyc.connect(nextHost, nextPort)
+                    response = conn.root.get(key, translated_intended_server_order)
+                    conn.close()
+                    logging.debug("Get request completed.")
+                    logging.debug("------"*4)
+                    return response
+                else:
+                    logging.debug(f"Server {nextHost}:{nextPort} is not active.")
+                    logging.debug("------"*4)
+            except IndexError:
+                logging.error(f"Not enough entries in the routing table for {host}:{port}")
+                break
+            except Exception as e:
+                logging.error(f"Error connecting to server {nextHost}:{nextPort}: {e}")
 
-        conn = rpyc.connect(host, port)
-        response = conn.root.get(key)
-        conn.close()
-        logging.debug("Get request completed.")
-        return response
+        logging.error("Failed to fetch the data. No active servers available.")
+        logging.debug("------"*4)
+        return (None,-1)
     
     def exposed_put(self, key: str, value: any) -> int:
+        '''
+        Stores the value for the given key.
+
+        Args:
+            key (str): Key for which the value needs to be stored.
+            value (any): Value to be stored.
+        
+        Returns:
+            int: Status code. 0 for success, -1 for failure.
+        '''
         logging.debug("Put request received.")
         coordinatorServer = self._findCoordinatorServer(key)
-        host, port, _ = coordinatorServer
-        logging.debug(f"Host: {host}, Port: {port}")
-        conn = rpyc.connect(host, port)
-        response = conn.root.put(key, value)
+        host, port, vNodeNum = coordinatorServer
+
+        # Loop through the first N entries in the routing table for the coordinator server
+        intended_server_order = self.routingTables[(host, port)][vNodeNum]
+        translated_intended_server_order = [self._translate_address(h, p) for h, p in intended_server_order]
+        logging.debug(f"Intended server order: {translated_intended_server_order}")
+        logging.debug(f"Actual server order: {intended_server_order}")
+        for i in range(self.N):
+            try:
+                nextHost, nextPort = intended_server_order[i]
+                if self._ping(nextHost, nextPort):
+                    logging.debug(f"Coordinator Host: {host}, Port: {port}, vNodeNum: {vNodeNum}")
+                    conn = rpyc.connect(nextHost, nextPort)
+                    response = conn.root.coordinator_put(key, value, translated_intended_server_order)
+                    conn.close()
+                    logging.debug("Put request completed.")
+                    return response
+                else:
+                    logging.debug(f"Server {nextHost}:{nextPort} is not active.")
+            except IndexError:
+                logging.error(f"Not enough entries in the routing table for {host}:{port}")
+                break
+            except Exception as e:
+                logging.error(f"Error connecting to server {nextHost}:{nextPort}: {e}")
+
+        logging.error("Failed to store the data. No active servers available.")
+        return -1
+    
+    def exposed_toggle_server(self, host: str, port: int) -> None:
+        """
+        Toggles the server status.
+
+        Args:
+            host (str): Host of the server.
+            port (int): Port of the server.
+        """
+        
+        conn = rpyc.connect(host, int(port))
+        conn.root.toggle_server()
         conn.close()
-        logging.debug("Put request completed.")
-        return response
+
+        logging.debug("Server toggled.")
+        logging.debug("------"*4)
 
 
 if __name__ == '__main__':
