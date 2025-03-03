@@ -177,31 +177,117 @@ class KeyValueStoreService(rpyc.Service):
         else:
             logging.error("Failed to fetch the data. No majority value found.")
             return (None, -1)
-
-    def exposed_put(self, key, value):
-        logging.debug(f"Key: {key}, Value: {value}")
-        try:
-            self.store[key] = value
-            return 0
-        except Exception as e:
-            logging.error(f"Error in put: {e}")
-            return -1
-        # try:
-        #     status_code = self.get(key)[1]
-        #     if status_code == -1: # some error occurred
-        #         return -1
-        #     # in any other case, we can proceed with the put operation
-        #     self.store[key] = value
-        #     self._async_persist_to_disk()
-        #     logging.debug(f"key stored and persisted")
-        #     logging.debug("------"*4)
-        #     return status_code
+    
+    
+    def exposed_put(self, key, value, target_host=None, target_port=None):
+        """
+        Store a key-value pair in the appropriate store.
         
-        # except Exception as e:
-        #     logging.debug(f"Key: {key}, Value: {value}")
-        #     logging.error(f"Error in put: {e}")
-        #     logging.debug("------"*4)
-        #     return -1
+        Args:
+            key (str): The key to store
+            value: The value to store
+            target_host (str, optional): Target host for hinted handoff
+            target_port (int, optional): Target port for hinted handoff
+            
+        Returns:
+            int: 0 if key already existed, 1 if key is new, -1 on failure
+        """
+        
+        try:
+                
+            logging.debug(f"Put request received for key: {key}, value: {value}")
+            
+            # If target_host and target_port are provided, this is a hinted handoff
+            if target_host and target_port:
+                exists = key in self.hinted_replica
+                self.hinted_replica[key] = (value, target_host, target_port)
+                logging.debug(f"Stored hinted handoff for key {key} intended for {target_host}:{target_port}")
+            else:
+                # Regular put operation
+                exists = key in self.store
+                self.store[key] = value
+                self._async_persist_to_dist()
+                logging.debug(f"Stored key {key} with value {value}")
+            
+            logging.debug("------"*4)
+            return 0 if exists else 1
+            
+        except Exception as e:
+            logging.error(f"Error in Put: {e}")
+            return -1
+
+    def exposed_coordinator_put(self, key, value, intended_server_order):
+        logging.debug(f"Coordinator put request received for key: {key}")
+        logging.debug("------"*4)
+
+        '''
+        1. We have to maintain 2 arrays - working nodes and failed nodes {can store indices corresponding to intended_server_order}. Init exists = key in self.store.
+        2. Find the starting index of (self.host, self.port) in intended_server_order. All indices before this index are failed nodes.
+        3. Now iterate from start_index+1 to end of intended_server_order while success_count<N-1. 
+        4. Ping the server[index]. If active, (i) index<N then send {key, value, is_primary=true} to server[index] and increment success_count. (ii) index>=N then send {key, value, is_primary=true, failed_nodes.start.value} to server[index], pop failed_nodes.start, increment success_count.
+        5. Depending on whether primary is true (put in self.store) or false (put in self.hinted_replica along with target_host and target_port). Before putting we will check if the key exists in the corresponding store/hinted_replica. If it does we will return 0, else 1. Also persist the data to disk.
+        6. The response value to send operation, if error-free, exists *= response.
+        7. If success_count>0, then update the key's value in self.store and persist storage. Return exists.
+        '''
+        
+        # 1. Initialize variables
+        exists = key in self.store
+        failed_nodes = []
+        success_count = 0
+
+        # 2. Find the starting index of (self.host, self.port) in intended_server_order
+        intended_server_order = list(intended_server_order)
+        start_index = intended_server_order.index((self.host, self.port))
+
+        # All indices before start_index are failed nodes
+        for i in range(start_index):
+            failed_nodes.append(intended_server_order[i])
+
+        # 3. Now iterate from start_index+1 to end of intended_server_order
+        index = start_index + 1
+        while index < len(intended_server_order) and success_count < self.N-1:
+            try:
+                nextHost, nextPort = intended_server_order[index]
+                logging.debug(f"Trying to reach server {nextHost}:{nextPort}")
+                
+                # 4. Ping the server
+                conn = rpyc.connect(nextHost, nextPort)
+                if conn.root.ping():                    
+                    if index < self.N:
+                        # This is a primary node, send direct put request
+                        logging.debug(f"Sending direct put request to {nextHost}:{nextPort}")
+                        response = conn.root.exposed_put(key, value)
+                        exists *= response
+                        success_count += 1
+                        logging.debug(f"Successfully stored key {key} at {nextHost}:{nextPort}")
+                    else:
+                        # This is a node for hinted handoff
+                        if failed_nodes:
+                            failed_host, failed_port = failed_nodes.pop(0)
+                            logging.debug(f"Sending hinted handoff for {failed_host}:{failed_port} to {nextHost}:{nextPort}")
+                            response = conn.root.exposed_put(key, value, failed_host, failed_port)
+                            exists *= response
+                            success_count += 1
+                            logging.debug(f"Successfully stored hinted handoff for {failed_host}:{failed_port} at {nextHost}:{nextPort}")
+                    
+                else:
+                    logging.debug(f"Server {nextHost}:{nextPort} is not active")
+                    failed_nodes.append((nextHost, nextPort))
+                conn.close()
+                    
+            except Exception as e:
+                logging.error(f"Error connecting to server {nextHost}:{nextPort}: {e}")
+                failed_nodes.append((nextHost, nextPort))
+            
+            index += 1  
+
+        # 7. If success_count>0, then update the key's value in self.store and persist storage
+        if success_count > 0:
+            self.store[key] = value
+            self._async_persist_to_dist()
+            return exists
+        else:
+            return -1
 
     def exposed_delete(self, key):
         if key in self.store:

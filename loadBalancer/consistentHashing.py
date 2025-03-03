@@ -288,7 +288,7 @@ class consistentHashing(rpyc.Service):
                 if self._ping(nextHost, nextPort):
                     logging.debug(f"Coordinator Host: {host}, Port: {port}, vNodeNum: {vNodeNum}")
                     conn = rpyc.connect(nextHost, nextPort)
-                    response = conn.root.put(key, value, translated_intended_server_order)
+                    response = conn.root.coordinator_put(key, value, translated_intended_server_order)
                     conn.close()
                     logging.debug("Put request completed.")
                     return response
