@@ -100,7 +100,7 @@ if __name__ == '__main__':
                     continue
 
                 status_code = client.kv_put(key, value)
-                if status_code == 0:
+                if status_code != -1:
                     print("Key-Value pair stored successfully.")
                 print(f"status_code: {status_code}")
 
@@ -111,7 +111,7 @@ if __name__ == '__main__':
                 host = input("Enter the host:")
                 port = int(input("Enter the port:"))
                 client.toggle_server(host, port)
-                
+
             case _: # Exit
                 print("Invalid choice.")
                 break

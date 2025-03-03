@@ -263,15 +263,45 @@ class consistentHashing(rpyc.Service):
         return (None,-1)
     
     def exposed_put(self, key: str, value: any) -> int:
+        '''
+        Stores the value for the given key.
+
+        Args:
+            key (str): Key for which the value needs to be stored.
+            value (any): Value to be stored.
+        
+        Returns:
+            int: Status code. 0 for success, -1 for failure.
+        '''
         logging.debug("Put request received.")
         coordinatorServer = self._findCoordinatorServer(key)
-        host, port, _ = coordinatorServer
-        logging.debug(f"Host: {host}, Port: {port}")
-        conn = rpyc.connect(host, port)
-        response = conn.root.put(key, value)
-        conn.close()
-        logging.debug("Put request completed.")
-        return response
+        host, port, vNodeNum = coordinatorServer
+
+        # Loop through the first N entries in the routing table for the coordinator server
+        intended_server_order = self.routingTables[(host, port)][vNodeNum]
+        translated_intended_server_order = [self._translate_address(h, p) for h, p in intended_server_order]
+        logging.debug(f"Intended server order: {translated_intended_server_order}")
+        logging.debug(f"Actual server order: {intended_server_order}")
+        for i in range(self.N):
+            try:
+                nextHost, nextPort = intended_server_order[i]
+                if self._ping(nextHost, nextPort):
+                    logging.debug(f"Coordinator Host: {host}, Port: {port}, vNodeNum: {vNodeNum}")
+                    conn = rpyc.connect(nextHost, nextPort)
+                    response = conn.root.put(key, value, translated_intended_server_order)
+                    conn.close()
+                    logging.debug("Put request completed.")
+                    return response
+                else:
+                    logging.debug(f"Server {nextHost}:{nextPort} is not active.")
+            except IndexError:
+                logging.error(f"Not enough entries in the routing table for {host}:{port}")
+                break
+            except Exception as e:
+                logging.error(f"Error connecting to server {nextHost}:{nextPort}: {e}")
+
+        logging.error("Failed to store the data. No active servers available.")
+        return -1
     
     def exposed_toggle_server(self, host: str, port: int) -> None:
         """
