@@ -194,6 +194,9 @@ class KeyValueStoreService(rpyc.Service):
         """
         
         try:
+            if not self.active:
+                logging.debug(f"Server is not active. Put operation rejected.")
+                return -2
                 
             logging.debug(f"Put request received for key: {key}, value: {value}")
             
@@ -250,29 +253,49 @@ class KeyValueStoreService(rpyc.Service):
                 nextHost, nextPort = intended_server_order[index]
                 logging.debug(f"Trying to reach server {nextHost}:{nextPort}")
                 
-                # 4. Ping the server
+                # 4. Connect to the server
                 conn = rpyc.connect(nextHost, nextPort)
-                if conn.root.ping():                    
-                    if index < self.N:
-                        # This is a primary node, send direct put request
-                        logging.debug(f"Sending direct put request to {nextHost}:{nextPort}")
-                        response = conn.root.exposed_put(key, value)
+                if index < self.N:
+                    # This is a primary node, send direct put request
+                    logging.debug(f"Sending direct put request to {nextHost}:{nextPort}")
+                    response = conn.root.exposed_put(key, value)
+                    
+                    if response == -2:
+                        # Server reported it's not active
+                        logging.debug(f"Server {nextHost}:{nextPort} reported it's not active")
+                        failed_nodes.append((nextHost, nextPort))
+                    elif response == -1:
+                        # Error occurred during put operation
+                        logging.error(f"Error occurred during put operation at {nextHost}:{nextPort}")
+                    else:
+                        # Successfully stored - update exists value and increment success count
                         exists *= response
                         success_count += 1
                         logging.debug(f"Successfully stored key {key} at {nextHost}:{nextPort}")
-                    else:
-                        # This is a node for hinted handoff
-                        if failed_nodes:
-                            failed_host, failed_port = failed_nodes.pop(0)
-                            logging.debug(f"Sending hinted handoff for {failed_host}:{failed_port} to {nextHost}:{nextPort}")
-                            response = conn.root.exposed_put(key, value, failed_host, failed_port)
+                else:
+                    # This is a node for hinted handoff
+                    if failed_nodes:
+                        failed_host, failed_port = failed_nodes.pop(0)
+                        logging.debug(f"Sending hinted handoff for {failed_host}:{failed_port} to {nextHost}:{nextPort}")
+                        response = conn.root.exposed_put(key, value, failed_host, failed_port)
+                        
+                        if response == -2:
+                            # Server reported it's not active
+                            logging.debug(f"Server {nextHost}:{nextPort} reported it's not active")
+                            failed_nodes.append((nextHost, nextPort))
+                            # Put back the failed node we popped
+                            failed_nodes.append((failed_host, failed_port))
+                        elif response == -1:
+                            # Error occurred during put operation
+                            logging.error(f"Error occurred during hinted handoff operation at {nextHost}:{nextPort}")
+                            # Put back the failed node we popped
+                            failed_nodes.append((failed_host, failed_port))
+                        else:
+                            # Successfully stored - update exists value and increment success count
                             exists *= response
                             success_count += 1
                             logging.debug(f"Successfully stored hinted handoff for {failed_host}:{failed_port} at {nextHost}:{nextPort}")
-                    
-                else:
-                    logging.debug(f"Server {nextHost}:{nextPort} is not active")
-                    failed_nodes.append((nextHost, nextPort))
+
                 conn.close()
                     
             except Exception as e:
