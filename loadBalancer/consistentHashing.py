@@ -341,3 +341,13 @@ if __name__ == '__main__':
     server = ThreadedServer(consistentHashing, port=port)
     print(f"Load Balancer running on port {port}")
     server.start()
+
+    # Running the same instance
+    # port = 5000
+    # service = consistentHashing()
+    # server = ThreadedServer(service=service, port=port)
+    # print(f"Load Balancer running on port {port}")
+    # server.start()
+
+    # service = KeyValueStoreService()
+    # server = ThreadedServer(service=service, port=port)
